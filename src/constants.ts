@@ -1,5 +1,11 @@
 import { Module, Division, Hospital } from './types';
 
+export const RESPONSIBLE_PARTY_OPTIONS = [
+  "HCA Unit Manager",
+  "HCA Division Leader",
+  "ITRAK Team"
+] as const;
+
 export const ROLLOUT_STEPS = [
   "Initial meeting with division and unit leader",
   "IT approval",

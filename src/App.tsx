@@ -33,7 +33,7 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import html2canvas from 'html2canvas';
 import JSZip from 'jszip';
-import { MODULES, HOSPITALS, DIVISIONS, ROLLOUT_STEPS } from './constants';
+import { MODULES, HOSPITALS, DIVISIONS, ROLLOUT_STEPS, RESPONSIBLE_PARTY_OPTIONS } from './constants';
 import { RolloutProgress } from './types';
 
 // Initial empty progress data
@@ -44,6 +44,8 @@ const EMPTY_PROGRESS: RolloutProgress[] = HOSPITALS.map(h => ({
   stepStatus: Array(12).fill(false),
   stepCompletionDates: Array(12).fill(null),
   stepComments: Array(12).fill(""),
+  stepResponsibleParty: Array(12).fill("ITRAK Team"),
+  currentTaskIndex: null,
   lastUpdated: new Date().toISOString()
 }));
 
@@ -56,6 +58,11 @@ export default function App() {
   const progressRef = useRef(progress);
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [bulkScope, setBulkScope] = useState<'all' | 'divisions'>('all');
+  const [bulkDivisionIds, setBulkDivisionIds] = useState<string[]>([]);
+  const [bulkStepIndex, setBulkStepIndex] = useState<string>('all');
+  const [bulkResponsibleParty, setBulkResponsibleParty] = useState<string>('ITRAK Team');
+  const [bulkUpdateMessage, setBulkUpdateMessage] = useState<string | null>(null);
 
   useEffect(() => {
     progressRef.current = progress;
@@ -81,27 +88,31 @@ export default function App() {
     }, 500);
   }, [saveProgressToServer]);
 
-  useEffect(() => {
-    let cancelled = false;
+  const fetchProgress = useCallback(() => {
     fetch('/api/progress')
       .then((res) => res.ok ? res.json() : [])
       .then((data: RolloutProgress[]) => {
-        if (cancelled) return;
         if (Array.isArray(data) && data.length > 0) {
-          setProgress(data);
+          const normalized = data.map(p => ({
+            ...p,
+            stepResponsibleParty: p.stepResponsibleParty ?? Array(12).fill("ITRAK Team"),
+            currentTaskIndex: p.currentTaskIndex ?? null,
+          }));
+          setProgress(normalized);
         } else {
           saveProgressToServer(EMPTY_PROGRESS);
           setProgress(EMPTY_PROGRESS);
         }
       })
       .catch(() => {
-        if (!cancelled) {
-          saveProgressToServer(EMPTY_PROGRESS);
-          setProgress(EMPTY_PROGRESS);
-        }
+        saveProgressToServer(EMPTY_PROGRESS);
+        setProgress(EMPTY_PROGRESS);
       });
-    return () => { cancelled = true; };
   }, [saveProgressToServer]);
+
+  useEffect(() => {
+    fetchProgress();
+  }, [fetchProgress]);
 
   const [selectedHospitalId, setSelectedHospitalId] = useState<string | null>(null);
   const [selectedDivisionId, setSelectedDivisionId] = useState<string | null>(null);
@@ -152,6 +163,28 @@ export default function App() {
         const newComments = [...p.stepComments];
         newComments[index] = comment;
         return { ...p, stepComments: newComments, lastUpdated: new Date().toISOString() };
+      }
+      return p;
+    }));
+    triggerSave();
+  };
+
+  const updateResponsibleParty = (hospitalId: string, stepIndex: number, value: string) => {
+    setProgress(prev => prev.map(p => {
+      if (p.hospitalId === hospitalId) {
+        const newParty = [...(p.stepResponsibleParty ?? Array(12).fill("ITRAK Team"))];
+        newParty[stepIndex] = value;
+        return { ...p, stepResponsibleParty: newParty, lastUpdated: new Date().toISOString() };
+      }
+      return p;
+    }));
+    triggerSave();
+  };
+
+  const updateCurrentTask = (hospitalId: string, taskIndex: number | null) => {
+    setProgress(prev => prev.map(p => {
+      if (p.hospitalId === hospitalId) {
+        return { ...p, currentTaskIndex: taskIndex, lastUpdated: new Date().toISOString() };
       }
       return p;
     }));
@@ -467,6 +500,20 @@ export default function App() {
                         </div>
                       </div>
 
+                      <div className="mb-8">
+                        <p className="text-[10px] font-bold uppercase tracking-widest opacity-40 mb-2">Current / Next Task in Progress</p>
+                        <select
+                          value={hospitalProgress?.currentTaskIndex != null ? String(hospitalProgress.currentTaskIndex) : ''}
+                          onChange={(e) => updateCurrentTask(selectedHospitalId!, e.target.value === '' ? null : Number(e.target.value))}
+                          className="w-full max-w-md p-3 rounded-xl border border-black/10 bg-white text-sm font-medium focus:outline-none focus:border-black/20"
+                        >
+                          <option value="">None</option>
+                          {ROLLOUT_STEPS.map((step, idx) => (
+                            <option key={idx} value={idx}>{step}</option>
+                          ))}
+                        </select>
+                      </div>
+
                       <div className="space-y-4">
                         {ROLLOUT_STEPS.map((step, index) => {
                           const isCompleted = hospitalProgress?.stepStatus[index];
@@ -499,6 +546,18 @@ export default function App() {
                                           Completed on {new Date(hospitalProgress.stepCompletionDates[index]!).toLocaleDateString()}
                                         </p>
                                       )}
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                      <label className="text-[10px] font-bold uppercase tracking-wider text-black/50 whitespace-nowrap">Responsible:</label>
+                                      <select
+                                        value={(hospitalProgress?.stepResponsibleParty ?? Array(12).fill("ITRAK Team"))[index]}
+                                        onChange={(e) => updateResponsibleParty(selectedHospitalId!, index, e.target.value)}
+                                        className="py-1.5 px-2 rounded-lg border border-black/10 bg-white text-xs font-medium focus:outline-none focus:border-black/20 min-w-[140px]"
+                                      >
+                                        {RESPONSIBLE_PARTY_OPTIONS.map(opt => (
+                                          <option key={opt} value={opt}>{opt}</option>
+                                        ))}
+                                      </select>
                                     </div>
                                     <button 
                                       onClick={() => toggleComment(index)}
@@ -822,6 +881,108 @@ export default function App() {
                         Note: Structural changes currently require code updates in constants.ts
                       </p>
                     </div>
+                  </div>
+
+                  <div className="bg-white p-8 rounded-3xl border border-black/5 shadow-sm space-y-6">
+                    <div className="flex items-center gap-4">
+                      <div className="w-12 h-12 bg-amber-50 rounded-2xl flex items-center justify-center">
+                        <Users className="text-amber-600" />
+                      </div>
+                      <div>
+                        <h3 className="font-bold">Bulk Role Update</h3>
+                        <p className="text-xs text-black/50">Update Responsible Party across hospitals.</p>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <label className="text-[10px] font-bold uppercase tracking-widest opacity-40 block mb-2">Scope</label>
+                        <select
+                          value={bulkScope}
+                          onChange={(e) => setBulkScope(e.target.value as 'all' | 'divisions')}
+                          className="w-full p-3 rounded-xl border border-black/5 bg-white text-sm focus:outline-none focus:border-black/20"
+                        >
+                          <option value="all">All Hospitals</option>
+                          <option value="divisions">By Division</option>
+                        </select>
+                      </div>
+                      {bulkScope === 'divisions' && (
+                        <div>
+                          <label className="text-[10px] font-bold uppercase tracking-widest opacity-40 block mb-2">Divisions</label>
+                          <select
+                            multiple
+                            value={bulkDivisionIds}
+                            onChange={(e) => {
+                              const selected = Array.from(e.target.selectedOptions, o => o.value);
+                              setBulkDivisionIds(selected);
+                            }}
+                            className="w-full p-3 rounded-xl border border-black/5 bg-white text-sm focus:outline-none focus:border-black/20 min-h-[80px]"
+                          >
+                            {DIVISIONS.map(d => (
+                              <option key={d.id} value={d.id}>{d.name}</option>
+                            ))}
+                          </select>
+                          <p className="text-[10px] text-black/40 mt-1">Hold Ctrl/Cmd to select multiple</p>
+                        </div>
+                      )}
+                      <div>
+                        <label className="text-[10px] font-bold uppercase tracking-widest opacity-40 block mb-2">Step</label>
+                        <select
+                          value={bulkStepIndex}
+                          onChange={(e) => setBulkStepIndex(e.target.value)}
+                          className="w-full p-3 rounded-xl border border-black/5 bg-white text-sm focus:outline-none focus:border-black/20"
+                        >
+                          <option value="all">All Steps</option>
+                          {ROLLOUT_STEPS.map((step, idx) => (
+                            <option key={idx} value={idx}>{step}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold uppercase tracking-widest opacity-40 block mb-2">Responsible Party</label>
+                        <select
+                          value={bulkResponsibleParty}
+                          onChange={(e) => setBulkResponsibleParty(e.target.value)}
+                          className="w-full p-3 rounded-xl border border-black/5 bg-white text-sm focus:outline-none focus:border-black/20"
+                        >
+                          {RESPONSIBLE_PARTY_OPTIONS.map(opt => (
+                            <option key={opt} value={opt}>{opt}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                    {bulkUpdateMessage && (
+                      <p className={`text-sm font-medium ${bulkUpdateMessage.startsWith('Updated') ? 'text-emerald-600' : 'text-red-600'}`}>
+                        {bulkUpdateMessage}
+                      </p>
+                    )}
+                    <button
+                      onClick={async () => {
+                        setBulkUpdateMessage(null);
+                        try {
+                          const stepIndex = bulkStepIndex === 'all' ? undefined : Number(bulkStepIndex);
+                          const scope = bulkScope === 'divisions' && bulkDivisionIds.length > 0 ? 'divisions' : 'all';
+                          const divisionIds = scope === 'divisions' ? bulkDivisionIds : undefined;
+                          const res = await fetch('/api/progress/bulk-responsible-party', {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ stepIndex, responsibleParty: bulkResponsibleParty, scope, divisionIds }),
+                          });
+                          const data = await res.json().catch(() => ({}));
+                          if (!res.ok) {
+                            setBulkUpdateMessage(data.error || 'Update failed');
+                            return;
+                          }
+                          setBulkUpdateMessage(`Updated ${data.updated ?? 0} hospitals.`);
+                          fetchProgress();
+                        } catch (err) {
+                          setBulkUpdateMessage('Request failed. Try again.');
+                        }
+                      }}
+                      className="w-full flex items-center justify-center gap-2 bg-amber-600 text-white p-4 rounded-2xl font-bold hover:bg-amber-700 transition-all shadow-md"
+                    >
+                      <Users size={18} />
+                      Apply Bulk Update
+                    </button>
                   </div>
 
                   <div className="bg-slate-900 p-8 rounded-3xl text-white space-y-6">
